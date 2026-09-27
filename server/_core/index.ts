@@ -5,6 +5,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerYoutubeOAuthRoutes } from "../youtube-oauth";
+import { registerMediaRoutes } from "../media";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -35,6 +36,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerYoutubeOAuthRoutes(app);
+  registerMediaRoutes(app);
   app.get("/robots.txt", (req, res) => {
     const protocol = req.get("x-forwarded-proto")?.split(",")[0]?.trim() || req.protocol;
     const origin = `${protocol}://${req.get("host")}`;

@@ -23,7 +23,23 @@ export const youtubeConnections = mysqlTable("youtube_connections", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const mediaUploads = mysqlTable("media_uploads", {
+  id: int("id").autoincrement().primaryKey(),
+  ownerOpenId: varchar("ownerOpenId", { length: 64 }).notNull(),
+  originalFilename: varchar("originalFilename", { length: 255 }).notNull(),
+  processedKey: text("processedKey"),
+  processedUrl: text("processedUrl"),
+  mimeType: varchar("mimeType", { length: 100 }).notNull(),
+  sizeBytes: int("sizeBytes").notNull(),
+  status: mysqlEnum("status", ["processing", "ready", "failed"]).default("processing").notNull(),
+  errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type YoutubeConnection = typeof youtubeConnections.$inferSelect;
 export type InsertYoutubeConnection = typeof youtubeConnections.$inferInsert;
+export type MediaUpload = typeof mediaUploads.$inferSelect;
+export type InsertMediaUpload = typeof mediaUploads.$inferInsert;

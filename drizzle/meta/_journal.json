@@ -15,6 +15,13 @@
       "when": 1790215452129,
       "tag": "0001_dashing_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1790216244065,
+      "tag": "0002_volatile_virginia_dare",
+      "breakpoints": true
     }
   ]
 }

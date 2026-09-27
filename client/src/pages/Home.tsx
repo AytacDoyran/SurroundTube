@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { startLogin } from "@/const";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   CircleHelp,
   Compass,
   Headphones,
+  FileVideo2,
   Heart,
   History,
   Home as HomeIcon,
@@ -37,6 +38,7 @@ import {
   Waves,
   X,
   Zap,
+  Trash2,
 } from "lucide-react";
 
 const fallbackVideos = [
@@ -86,7 +88,7 @@ const fallbackVideos = [
   },
 ];
 
-type Video = (typeof fallbackVideos)[number];
+type Video = (typeof fallbackVideos)[number] & { processedUrl?: string | null; isUploaded?: boolean; mediaId?: number };
 
 type NavItem = { label: string; icon: typeof HomeIcon };
 const navItems: NavItem[] = [
@@ -113,19 +115,42 @@ export default function Home() {
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [surroundMode, setSurroundMode] = useState("YouTube original");
+  const surroundMode = selectedVideo.isUploaded ? "7.1 Surround" : "YouTube original";
   const [showMenu, setShowMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [comment, setComment] = useState("");
+  const [uploadState, setUploadState] = useState<{ status: "idle" | "uploading" | "ready" | "failed"; progress: number; name?: string; message?: string }>({ status: "idle", progress: 0 });
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const youtubeConnection = trpc.youtube.connection.useQuery(undefined, { enabled: isAuthenticated });
   const youtubeAuthUrl = trpc.youtube.authUrl.useMutation();
   const likeVideo = trpc.youtube.like.useMutation();
   const subscribeToChannel = trpc.youtube.subscribe.useMutation();
   const createComment = trpc.youtube.comment.useMutation();
+  const mediaList = trpc.media.list.useQuery(undefined, { enabled: Boolean(isAuthenticated && user?.role === "admin") });
+  const publicMedia = trpc.media.publicList.useQuery();
+  const deleteMedia = trpc.media.delete.useMutation();
+  const trpcUtils = trpc.useUtils();
+
+  const uploadedVideos = useMemo<Video[]>(() => (publicMedia.data ?? []).map((item) => ({
+    id: `media-${item.id}`,
+    title: item.originalFilename,
+    channel: "SurroundTube · 7.1",
+    channelId: null,
+    views: "Özel medya",
+    age: "Yeni işlendi",
+    duration: "7.1",
+    category: "My media",
+    color: "from-cyan-400/35 via-blue-500/20 to-transparent",
+    processedUrl: item.processedUrl,
+    isUploaded: true,
+    mediaId: item.id,
+  })), [publicMedia.data]);
 
   useEffect(() => {
-    const status = new URLSearchParams(window.location.search).get("youtube");
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("youtube");
+    if (params.get("lab") === "1") setShowSettings(true);
     if (status === "connected") toast.success("YouTube hesabın bağlandı.");
     if (status === "error") toast.error("YouTube hesabı bağlanamadı.");
   }, []);
@@ -193,6 +218,11 @@ export default function Home() {
   };
 
   const toggleLike = () => {
+    if (selectedVideo.isUploaded) {
+      setLiked((value) => !value);
+      toast.success(liked ? "Kişisel beğeni kaldırıldı" : "Kişisel video beğenildi");
+      return;
+    }
     if (!requireYouTube()) return;
     setLiked((value) => !value);
     likeVideo.mutate({ videoId: selectedVideo.id }, {
@@ -215,9 +245,77 @@ export default function Home() {
 
   const submitComment = () => {
     if (!comment.trim()) return;
+    if (selectedVideo.isUploaded) {
+      toast.info("Kişisel videolarda yorum alanı yalnızca YouTube videoları için açık.");
+      return;
+    }
     if (!requireYouTube()) return;
     createComment.mutate({ videoId: selectedVideo.id, text: comment.trim() }, {
       onSuccess: () => { toast.success("Yorum YouTube'a gönderildi."); setComment(""); },
+      onError: (error) => toast.error(error.message),
+    });
+  };
+
+  const openOwnerFilePicker = () => {
+    if (!isAuthenticated) {
+      toast.info("Özel medya alanı için önce SurroundTube oturumunu açmalısın.");
+      startLogin();
+      return;
+    }
+    if (user?.role !== "admin") {
+      toast.error("Bu yükleme alanı yalnızca site sahibine açıktır.");
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
+  const uploadOwnerVideo = (file: File) => {
+    if (file.size > 128 * 1024 * 1024) {
+      toast.error("Video 128 MB sınırını aşamaz.");
+      return;
+    }
+    const allowed = ["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"];
+    if (!allowed.includes(file.type)) {
+      toast.error("MP4, WebM, MOV veya MKV yükleyebilirsin.");
+      return;
+    }
+    setUploadState({ status: "uploading", progress: 0, name: file.name });
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/owner/media");
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Content-Type", file.type);
+    xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) setUploadState((current) => ({ ...current, progress: Math.round((event.loaded / event.total) * 100) }));
+    };
+    xhr.onload = () => {
+      let payload: { status?: string; error?: string } = {};
+      try { payload = JSON.parse(xhr.responseText); } catch { /* keep empty payload */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setUploadState({ status: "ready", progress: 100, name: file.name, message: "7.1 sesli çıktı hazır." });
+        toast.success("Video işlendi ve 7.1 ses düzeniyle kaydedildi.");
+        trpcUtils.media.list.invalidate();
+      } else {
+        setUploadState({ status: "failed", progress: 0, name: file.name, message: payload.error ?? "Video işlenemedi." });
+        toast.error(payload.error ?? "Video işlenemedi.");
+      }
+    };
+    xhr.onerror = () => {
+      setUploadState({ status: "failed", progress: 0, name: file.name, message: "Ağ hatası." });
+      toast.error("Yükleme sırasında ağ hatası oluştu.");
+    };
+    xhr.send(file);
+  };
+
+  const deleteOwnerVideo = (mediaId: number, filename: string) => {
+    if (!window.confirm(`“${filename}” videosu silinsin mi?`)) return;
+    deleteMedia.mutate({ id: mediaId }, {
+      onSuccess: () => {
+        toast.success("Video silindi.");
+        trpcUtils.media.list.invalidate();
+        trpcUtils.media.publicList.invalidate();
+        if (selectedVideo.mediaId === mediaId) setSelectedVideo(fallbackVideos[0]);
+      },
       onError: (error) => toast.error(error.message),
     });
   };
@@ -335,6 +433,8 @@ export default function Home() {
             </div>
           </section>
 
+          {uploadedVideos.length > 0 && <section className="mt-10"><div className="mb-5 flex items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300"><FileVideo2 className="h-3.5 w-3.5" /> İşlenen videolar</div><h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.03em] text-white">Senin 7.1 arşivin</h2></div><span className="text-[11px] text-white/35">Kaynak 7.1 · cihazda otomatik downmix</span></div><div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">{uploadedVideos.map((video) => <article key={video.id} className="group rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 transition hover:border-cyan-300/30" onClick={() => selectVideo(video)}><div className="relative overflow-hidden rounded-xl bg-black"><video src={video.processedUrl ?? undefined} className="aspect-video w-full object-cover" controls preload="metadata" onClick={(event) => event.stopPropagation()} /><div className="absolute left-2 top-2 rounded-md bg-cyan-300/90 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-950">7.1</div></div><div className="mt-3 flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium text-white/85">{video.title}</h3><p className="mt-1 text-[11px] text-white/35">{video.channel}</p></div>{isAuthenticated && user?.role === "admin" && video.mediaId && <button onClick={(event) => { event.stopPropagation(); deleteOwnerVideo(video.mediaId!, video.title); }} className="rounded-lg p-2 text-white/35 transition hover:bg-rose-300/10 hover:text-rose-300" aria-label="Videoyu sil"><Trash2 className="h-4 w-4" /></button>}</div></article>)}</div></section>}
+
           <section id="feed" className="mt-10">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300"><Zap className="h-3.5 w-3.5" /> {submittedQuery ? "Arama sonuçları" : "Senin için seçtik"}</div><h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.03em] text-white">Bugünün sesleri</h2></div><button onClick={() => toast.info("Daha fazla keşif yakında.")} className="flex items-center gap-1 text-xs font-medium text-white/45 transition hover:text-cyan-200">Tümünü gör <ChevronRight className="h-4 w-4" /></button></div>
             {submittedQuery && searchQuery.isLoading && <div className="mb-4 rounded-xl border border-cyan-300/15 bg-cyan-300/5 px-4 py-3 text-xs text-cyan-100/70">YouTube araması getiriliyor…</div>}
@@ -357,8 +457,8 @@ export default function Home() {
             <div className="overflow-hidden rounded-[22px] border border-white/10 bg-[#0f151e]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-5 py-4"><div><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35"><Volume2 className="h-3.5 w-3.5 text-cyan-300" /> Oynatma alanı</div><h3 className="mt-1 max-w-[500px] truncate text-base font-semibold text-white">{selectedVideo.title}</h3></div><div className="flex items-center gap-1"><Button onClick={toggleLike} variant="ghost" size="sm" className={`rounded-lg text-xs ${liked ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><ThumbsUp className={`mr-1.5 h-4 w-4 ${liked ? "fill-cyan-300" : ""}`} /> {liked ? "Beğenildi" : "Beğen"}</Button><Button onClick={() => setSaved((value) => !value)} variant="ghost" size="sm" className={`rounded-lg text-xs ${saved ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><Bookmark className={`mr-1.5 h-4 w-4 ${saved ? "fill-cyan-300" : ""}`} /> Kaydet</Button><Button onClick={() => toast.success("Paylaşım bağlantısı hazırlandı.")} variant="ghost" size="sm" className="rounded-lg text-xs text-white/50 hover:text-white"><Share2 className="mr-1.5 h-4 w-4" /> Paylaş</Button></div></div>
               <div className="grid gap-0 lg:grid-cols-[1fr_245px]">
-                <div className="aspect-video bg-black"><iframe className="h-full w-full" src={`https://www.youtube.com/embed/${selectedVideo.id}?rel=0&modestbranding=1`} title={selectedVideo.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>
-                <div className="border-t border-white/[0.07] p-5 lg:border-l lg:border-t-0"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/30">Ses modu</div><div className="mt-1 text-sm font-semibold text-white">{surroundMode}</div></div><SlidersHorizontal className="h-4 w-4 text-cyan-300" /></div><div className="mt-5 space-y-2">{["YouTube original", "Licensed 5.1", "Licensed 7.1"].map((mode) => <button key={mode} onClick={() => { setSurroundMode(mode); if (mode !== "YouTube original") toast.info("Bu mod yalnızca lisanslı stem içeren yüklemelerde aktiftir."); }} className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left text-xs transition ${surroundMode === mode ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-100" : "border-white/[0.07] text-white/45 hover:bg-white/[0.05]"}`}><span className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${surroundMode === mode ? "bg-cyan-300 shadow-[0_0_8px_#67e8f9]" : "bg-white/20"}`} />{mode}</span>{mode !== "YouTube original" && <span className="rounded bg-lime-300/10 px-1.5 py-0.5 text-[9px] text-lime-200">LAB</span>}</button>)}</div><p className="mt-5 text-[10px] leading-4 text-white/30">YouTube içeriklerinde ses kaynağı değiştirilmez. 5.1/7.1 modları, hakları sana ait veya lisanslı stem projeleri içindir.</p></div>
+                <div className="aspect-video bg-black">{selectedVideo.isUploaded && selectedVideo.processedUrl ? <video className="h-full w-full" src={selectedVideo.processedUrl} controls playsInline preload="metadata" /> : <iframe className="h-full w-full" src={`https://www.youtube.com/embed/${selectedVideo.id}?rel=0&modestbranding=1`} title={selectedVideo.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />}</div>
+                <div className="border-t border-white/[0.07] p-5 lg:border-l lg:border-t-0"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/30">Ses modu</div><div className="mt-1 text-sm font-semibold text-white">{surroundMode}</div></div><SlidersHorizontal className="h-4 w-4 text-cyan-300" /></div><div className="mt-5 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-xs text-cyan-100"><div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_8px_#67e8f9]" />7.1 Surround zorunlu</div><p className="mt-2 text-[10px] leading-4 text-cyan-100/60">Cihaz 7.1 desteklemiyorsa işletim sistemi veya tarayıcı otomatik downmix yapar; kaynak her zaman 7.1 kalır.</p></div><p className="mt-5 text-[10px] leading-4 text-white/30">YouTube videolarında orijinal kaynak ve oynatıcı korunur. Yüklediğin lisanslı videolar 7.1 AAC olarak işlenir.</p></div>
               </div>
               <div className="flex items-center justify-between border-t border-white/[0.07] px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-blue-600 text-xs font-bold text-slate-950">{selectedVideo.channel.slice(0, 1)}</div><div><div className="text-sm font-medium text-white">{selectedVideo.channel}</div><div className="text-[11px] text-white/35">YouTube creator</div></div><Button onClick={handleSubscribe} size="sm" className="ml-2 rounded-lg bg-white text-[11px] font-semibold text-slate-950 hover:bg-cyan-200">Abone ol</Button></div><div className="hidden items-center gap-3 text-[11px] text-white/35 sm:flex"><span>Orijinal video</span><a className="text-cyan-300 hover:text-cyan-200" href={`https://www.youtube.com/watch?v=${selectedVideo.id}`} target="_blank" rel="noreferrer">YouTube’da aç ↗</a></div></div>
             </div>
@@ -372,7 +472,11 @@ export default function Home() {
         </main>
       </div>
 
-      {showSettings && <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/60 p-0 backdrop-blur-sm sm:p-5"><div className="h-full w-full max-w-[440px] overflow-y-auto border-l border-white/10 bg-[#0d131b] p-6 shadow-2xl sm:h-auto sm:max-h-[calc(100vh-40px)] sm:rounded-[24px] sm:border"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-300">Spatial Lab / Settings</div><h2 className="mt-2 text-xl font-semibold text-white">Ses alanını kur</h2></div><button onClick={() => setShowSettings(false)} className="rounded-xl p-2 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Kapat"><X className="h-5 w-5" /></button></div><div className="mt-7 space-y-5"><div className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.06] p-4"><div className="flex gap-3"><Subtitles className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" /><p className="text-xs leading-5 text-amber-100/65">YouTube videolarının ses parçalarını ayırmak veya alternatif ses eklemek YouTube API politikalarıyla yasaktır. Bu panel sadece sana ait veya açık lisanslı stem’ler için kullanılacaktır.</p></div></div><div><label className="text-xs font-medium text-white/70">Hoparlör düzeni</label><div className="mt-2 grid grid-cols-3 gap-2">{["Stereo", "5.1", "7.1"].map((value) => <button key={value} onClick={() => toast.success(`${value} çıkış düzeni seçildi.`)} className={`rounded-xl border p-3 text-xs ${value === "7.1" ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/45 hover:bg-white/[0.07]"}`}>{value}{value === "7.1" && <span className="mt-1 block text-[9px] text-cyan-300/70">önerilen</span>}</button>)}</div></div><div><label className="text-xs font-medium text-white/70">Dinamik aralık</label><div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[72%] rounded-full bg-gradient-to-r from-cyan-300 to-blue-500" /></div><div className="mt-2 flex justify-between text-[10px] text-white/30"><span>Sinematik</span><span>72%</span><span>Stüdyo</span></div></div><div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"><div className="flex items-center gap-2 text-sm text-white"><LockIcon /> Licensed project mode</div><p className="mt-2 text-[11px] leading-5 text-white/35">Kendi ses dosyalarını yüklediğinde L/R/C/LFE/Ls/Rs/Lb/Rb kanallarını ayrı ayrı izleyebileceğin üretim alanı.</p><Button onClick={connectYouTube} className="mt-4 w-full rounded-xl bg-white text-xs text-slate-950 hover:bg-cyan-200">{youtubeConnection.data?.connected ? "YouTube bağlı · Stem alanını planla" : "YouTube hesabını bağla"}</Button></div></div></div></div>}
+      {showSettings && <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/60 p-0 backdrop-blur-sm sm:p-5"><div className="h-full w-full max-w-[440px] overflow-y-auto border-l border-white/10 bg-[#0d131b] p-6 shadow-2xl sm:h-auto sm:max-h-[calc(100vh-40px)] sm:rounded-[24px] sm:border"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-300">Spatial Lab / Settings</div><h2 className="mt-2 text-xl font-semibold text-white">Ses alanını kur</h2></div><button onClick={() => setShowSettings(false)} className="rounded-xl p-2 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Kapat"><X className="h-5 w-5" /></button></div><div className="mt-7 space-y-5"><div className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.06] p-4"><div className="flex gap-3"><Subtitles className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" /><p className="text-xs leading-5 text-amber-100/65">YouTube videolarının ses parçalarını ayırmak veya alternatif ses eklemek YouTube API politikalarıyla yasaktır. Bu panel sadece sana ait veya açık lisanslı stem’ler için kullanılacaktır.</p></div></div><div><label className="text-xs font-medium text-white/70">Hoparlör düzeni</label><div className="mt-2 grid grid-cols-3 gap-2"><div className="rounded-xl border border-cyan-300/30 bg-cyan-300/10 p-3 text-xs text-cyan-100"><div className="flex items-center justify-between"><span>7.1 Surround</span><span className="rounded bg-cyan-300/15 px-1.5 py-0.5 text-[9px] text-cyan-200">zorunlu</span></div><p className="mt-2 text-[10px] leading-4 text-cyan-100/60">Stereo seçilemez. 7.1 desteklenmeyen cihazlarda otomatik downmix yapılır.</p></div></div></div><div><label className="text-xs font-medium text-white/70">Dinamik aralık</label><div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[72%] rounded-full bg-gradient-to-r from-cyan-300 to-blue-500" /></div><div className="mt-2 flex justify-between text-[10px] text-white/30"><span>Sinematik</span><span>72%</span><span>Stüdyo</span></div></div><div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"><div className="flex items-center gap-2 text-sm text-white"><LockIcon /> Licensed project mode</div><p className="mt-2 text-[11px] leading-5 text-white/35">Kendi ses dosyalarını yüklediğinde L/R/C/LFE/Ls/Rs/Lb/Rb kanallarını ayrı ayrı izleyebileceğin üretim alanı.</p><input ref={fileInputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) uploadOwnerVideo(file); }} />
+                  <Button onClick={openOwnerFilePicker} className="mt-4 w-full rounded-xl bg-white text-xs text-slate-950 hover:bg-cyan-200"><FileVideo2 className="mr-2 h-3.5 w-3.5" /> Videoyu seç ve işle</Button>
+                  <p className="mt-2 text-[10px] leading-4 text-white/30">Yalnızca senin hesabın yükleyebilir. MP4/WebM/MOV/MKV · maksimum 128 MB.</p>
+                  {uploadState.status !== "idle" && <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center justify-between text-[11px] text-white/70"><span className="truncate">{uploadState.name}</span><span>{uploadState.status === "uploading" ? ("%" + uploadState.progress) : uploadState.status === "ready" ? "Hazır" : "Hata"}</span></div>{uploadState.status === "uploading" && <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-cyan-300 transition-all" style={{ width: "%" + uploadState.progress }} /></div>}{uploadState.message && <p className="mt-2 text-[10px] text-cyan-100/60">{uploadState.message}</p>}</div>}
+                  {Boolean(mediaList.data?.length) && <div className="mt-4 space-y-2"><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/30">İşlenmiş projelerin</div>{mediaList.data?.slice(0, 3).map((item) => <div key={item.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><FileVideo2 className="h-3.5 w-3.5 shrink-0 text-cyan-300" /><span className="min-w-0 flex-1 truncate text-[11px] text-white/70">{item.originalFilename}</span><span className={"text-[9px] uppercase tracking-wider " + (item.status === "ready" ? "text-lime-300" : item.status === "failed" ? "text-rose-300" : "text-amber-200")}>{item.status === "ready" ? "7.1 hazır" : item.status === "failed" ? "hata" : "işleniyor"}</span></div>{item.status === "ready" && item.processedUrl && <video className="mt-2 w-full rounded-lg" src={item.processedUrl} controls preload="metadata" />}</div>)}</div>}</div></div></div></div>}
     </div>
   );
 }
