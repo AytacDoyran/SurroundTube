@@ -142,10 +142,11 @@ export default function Home() {
   const trpcUtils = trpc.useUtils();
   const ownedMediaIds = useMemo(() => new Set((mediaList.data ?? []).map((item) => item.id)), [mediaList.data]);
   const channelInput = useMemo(() => ({ channelId: selectedVideo.channelId ?? "" }), [selectedVideo.channelId]);
-  const subscriptionStatus = trpc.youtube.subscriptionStatus.useQuery(channelInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded && selectedVideo.channelId) });
+  const youtubeReady = Boolean(isAuthenticated && youtubeConnection.data?.connected);
+  const subscriptionStatus = trpc.youtube.subscriptionStatus.useQuery(channelInput, { enabled: Boolean(youtubeReady && !selectedVideo.isUploaded && selectedVideo.channelId) });
   const youtubeLikeInput = useMemo(() => ({ videoId: selectedVideo.id }), [selectedVideo.id]);
-  const youtubeLikeStatus = trpc.youtube.likeStatus.useQuery(youtubeLikeInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded) });
-  const youtubeComments = trpc.youtube.comments.useQuery(youtubeLikeInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded), retry: false });
+  const youtubeLikeStatus = trpc.youtube.likeStatus.useQuery(youtubeLikeInput, { enabled: Boolean(youtubeReady && !selectedVideo.isUploaded), retry: false });
+  const youtubeComments = trpc.youtube.comments.useQuery(youtubeLikeInput, { enabled: Boolean(youtubeReady && !selectedVideo.isUploaded), retry: false });
 
   const uploadedVideos = useMemo<Video[]>(() => (publicMedia.data ?? []).map((item) => ({
     id: `media-${item.id}`,
