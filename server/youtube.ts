@@ -72,10 +72,43 @@ export const youtubeRouter = router({
     return { connected: Boolean(connection), scope: connection?.scope ?? null };
   }),
 
+  likeStatus: protectedProcedure.input(z.object({ videoId: z.string().min(1).max(32) })).query(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    const payload = await youtubeRequest(`/videos?part=id&myRating=like&maxResults=50`, token) as { items?: Array<{ id?: string }> };
+    return { liked: (payload.items ?? []).some((item) => item.id === input.videoId) };
+  }),
+
+  rate: protectedProcedure.input(z.object({ videoId: z.string().min(1).max(32), liked: z.boolean() })).mutation(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    await youtubeRequest(`/videos/rate?id=${encodeURIComponent(input.videoId)}&rating=${input.liked ? "like" : "none"}`, token, { method: "POST" });
+    return { liked: input.liked } as const;
+  }),
+
   like: protectedProcedure.input(z.object({ videoId: z.string().min(1).max(32) })).mutation(async ({ ctx, input }) => {
     const token = await getYoutubeAccessToken(ctx.user.openId);
     await youtubeRequest(`/videos/rate?id=${encodeURIComponent(input.videoId)}&rating=like`, token, { method: "POST" });
     return { success: true } as const;
+  }),
+
+  subscriptionStatus: protectedProcedure.input(z.object({ channelId: z.string().min(1).max(64) })).query(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    const payload = await youtubeRequest(`/subscriptions?part=id&mine=true&forChannelId=${encodeURIComponent(input.channelId)}&maxResults=1`, token);
+    return { subscribed: Array.isArray((payload as { items?: unknown[] }).items) && ((payload as { items?: unknown[] }).items?.length ?? 0) > 0 };
+  }),
+
+  toggleSubscription: protectedProcedure.input(z.object({ channelId: z.string().min(1).max(64) })).mutation(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    const existing = await youtubeRequest(`/subscriptions?part=id&mine=true&forChannelId=${encodeURIComponent(input.channelId)}&maxResults=1`, token) as { items?: Array<{ id?: string }> };
+    const subscriptionId = existing.items?.[0]?.id;
+    if (subscriptionId) {
+      await youtubeRequest(`/subscriptions?id=${encodeURIComponent(subscriptionId)}`, token, { method: "DELETE" });
+      return { subscribed: false } as const;
+    }
+    await youtubeRequest("/subscriptions?part=snippet", token, {
+      method: "POST",
+      body: JSON.stringify({ snippet: { resourceId: { kind: "youtube#channel", channelId: input.channelId } } }),
+    });
+    return { subscribed: true } as const;
   }),
 
   subscribe: protectedProcedure.input(z.object({ channelId: z.string().min(1).max(64) })).mutation(async ({ ctx, input }) => {
@@ -89,10 +122,30 @@ export const youtubeRouter = router({
 
   comment: protectedProcedure.input(z.object({ videoId: z.string().min(1).max(32), text: z.string().trim().min(1).max(10000) })).mutation(async ({ ctx, input }) => {
     const token = await getYoutubeAccessToken(ctx.user.openId);
-    await youtubeRequest("/commentThreads?part=snippet", token, {
+    const payload = await youtubeRequest("/commentThreads?part=snippet", token, {
       method: "POST",
       body: JSON.stringify({ snippet: { videoId: input.videoId, topLevelComment: { snippet: { textOriginal: input.text } } } }),
     });
+    return { success: true, commentId: (payload as { id?: string }).id ?? null } as const;
+  }),
+
+  comments: protectedProcedure.input(z.object({ videoId: z.string().min(1).max(32) })).query(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    const commentsPayload = await youtubeRequest(`/commentThreads?part=snippet&videoId=${encodeURIComponent(input.videoId)}&maxResults=100&textFormat=plainText`, token) as {
+      items?: Array<{ snippet?: { topLevelComment?: { id?: string; snippet?: { textDisplay?: string; authorDisplayName?: string; authorChannelId?: { value?: string } } } } }>;
+    };
+    const channelPayload = await youtubeRequest("/channels?part=id&mine=true", token) as { items?: Array<{ id?: string }> };
+    const ownChannelId = channelPayload.items?.[0]?.id;
+    return (commentsPayload.items ?? []).flatMap((item) => {
+      const comment = item.snippet?.topLevelComment;
+      if (!comment?.id || !ownChannelId || comment.snippet?.authorChannelId?.value !== ownChannelId) return [];
+      return [{ id: comment.id, userName: comment.snippet.authorDisplayName ?? "Sen", text: comment.snippet.textDisplay ?? "", canDelete: true }];
+    });
+  }),
+
+  deleteComment: protectedProcedure.input(z.object({ commentId: z.string().min(1).max(100) })).mutation(async ({ ctx, input }) => {
+    const token = await getYoutubeAccessToken(ctx.user.openId);
+    await youtubeRequest(`/comments?id=${encodeURIComponent(input.commentId)}`, token, { method: "DELETE" });
     return { success: true } as const;
   }),
 });

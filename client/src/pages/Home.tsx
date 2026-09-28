@@ -88,7 +88,7 @@ const fallbackVideos = [
   },
 ];
 
-type Video = (typeof fallbackVideos)[number] & { processedUrl?: string | null; isUploaded?: boolean; mediaId?: number };
+type Video = (typeof fallbackVideos)[number] & { processedUrl?: string | null; isUploaded?: boolean; mediaId?: number; viewsCount?: number };
 
 type NavItem = { label: string; icon: typeof HomeIcon };
 const navItems: NavItem[] = [
@@ -113,6 +113,7 @@ export default function Home() {
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<Video>(fallbackVideos[0]);
   const [liked, setLiked] = useState(false);
+  const [subscribed, setSubscribed] = useState(false);
   const [saved, setSaved] = useState(false);
   const [playing, setPlaying] = useState(false);
   const surroundMode = selectedVideo.isUploaded ? "7.1 Surround" : "YouTube original";
@@ -124,20 +125,34 @@ export default function Home() {
 
   const youtubeConnection = trpc.youtube.connection.useQuery(undefined, { enabled: isAuthenticated });
   const youtubeAuthUrl = trpc.youtube.authUrl.useMutation();
-  const likeVideo = trpc.youtube.like.useMutation();
-  const subscribeToChannel = trpc.youtube.subscribe.useMutation();
+  const rateYoutubeVideo = trpc.youtube.rate.useMutation();
+  const toggleYoutubeSubscription = trpc.youtube.toggleSubscription.useMutation();
   const createComment = trpc.youtube.comment.useMutation();
-  const mediaList = trpc.media.list.useQuery(undefined, { enabled: Boolean(isAuthenticated && user?.role === "admin") });
+  const deleteYoutubeComment = trpc.youtube.deleteComment.useMutation();
+  const mediaList = trpc.media.list.useQuery(undefined, { enabled: Boolean(isAuthenticated) });
   const publicMedia = trpc.media.publicList.useQuery();
   const deleteMedia = trpc.media.delete.useMutation();
+  const selectedMediaId = selectedVideo.mediaId ?? 0;
+  const mediaSocialInput = useMemo(() => ({ id: selectedMediaId }), [selectedMediaId]);
+  const mediaSocial = trpc.media.social.useQuery(mediaSocialInput, { enabled: selectedMediaId > 0 });
+  const recordMediaView = trpc.media.view.useMutation();
+  const toggleMediaLike = trpc.media.like.useMutation();
+  const createMediaComment = trpc.media.comment.useMutation();
+  const deleteMediaComment = trpc.media.deleteComment.useMutation();
   const trpcUtils = trpc.useUtils();
+  const ownedMediaIds = useMemo(() => new Set((mediaList.data ?? []).map((item) => item.id)), [mediaList.data]);
+  const channelInput = useMemo(() => ({ channelId: selectedVideo.channelId ?? "" }), [selectedVideo.channelId]);
+  const subscriptionStatus = trpc.youtube.subscriptionStatus.useQuery(channelInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded && selectedVideo.channelId) });
+  const youtubeLikeInput = useMemo(() => ({ videoId: selectedVideo.id }), [selectedVideo.id]);
+  const youtubeLikeStatus = trpc.youtube.likeStatus.useQuery(youtubeLikeInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded) });
+  const youtubeComments = trpc.youtube.comments.useQuery(youtubeLikeInput, { enabled: Boolean(isAuthenticated && !selectedVideo.isUploaded), retry: false });
 
   const uploadedVideos = useMemo<Video[]>(() => (publicMedia.data ?? []).map((item) => ({
     id: `media-${item.id}`,
     title: item.originalFilename,
     channel: "SurroundTube · 7.1",
     channelId: null,
-    views: "Özel medya",
+    views: `${item.viewsCount} görüntülenme`,
     age: "Yeni işlendi",
     duration: "7.1",
     category: "My media",
@@ -145,6 +160,7 @@ export default function Home() {
     processedUrl: item.processedUrl,
     isUploaded: true,
     mediaId: item.id,
+    viewsCount: item.viewsCount,
   })), [publicMedia.data]);
 
   useEffect(() => {
@@ -154,6 +170,18 @@ export default function Home() {
     if (status === "connected") toast.success("YouTube hesabın bağlandı.");
     if (status === "error") toast.error("YouTube hesabı bağlanamadı.");
   }, []);
+
+  useEffect(() => {
+    if (selectedMediaId > 0) recordMediaView.mutate({ id: selectedMediaId }, { onSuccess: () => trpcUtils.media.publicList.invalidate() });
+  }, [selectedMediaId]);
+
+  useEffect(() => {
+    setLiked(selectedVideo.isUploaded ? Boolean(mediaSocial.data?.liked) : Boolean(youtubeLikeStatus.data?.liked));
+  }, [selectedVideo.isUploaded, selectedMediaId, mediaSocial.data?.liked, youtubeLikeStatus.data?.liked]);
+
+  useEffect(() => {
+    setSubscribed(Boolean(subscriptionStatus.data?.subscribed));
+  }, [subscriptionStatus.data?.subscribed, selectedVideo.channelId]);
 
   const searchQuery = trpc.youtube.search.useQuery(
     { query: submittedQuery, maxResults: 8 },
@@ -219,15 +247,24 @@ export default function Home() {
 
   const toggleLike = () => {
     if (selectedVideo.isUploaded) {
-      setLiked((value) => !value);
-      toast.success(liked ? "Kişisel beğeni kaldırıldı" : "Kişisel video beğenildi");
+      if (!isAuthenticated) { startLogin(); return; }
+      toggleMediaLike.mutate({ id: selectedMediaId }, {
+        onSuccess: ({ liked: nextLiked }) => {
+          setLiked(nextLiked);
+          toast.success(nextLiked ? "Video beğenildi" : "Beğeni kaldırıldı");
+          trpcUtils.media.social.invalidate(mediaSocialInput);
+          trpcUtils.media.publicList.invalidate();
+        },
+        onError: (error) => toast.error(error.message),
+      });
       return;
     }
     if (!requireYouTube()) return;
     setLiked((value) => !value);
-    likeVideo.mutate({ videoId: selectedVideo.id }, {
-      onSuccess: () => toast.success(liked ? "Beğeni kaldırıldı" : "Video beğenildi"),
-      onError: (error) => { setLiked((value) => !value); toast.error(error.message); },
+    const nextLiked = !liked;
+    rateYoutubeVideo.mutate({ videoId: selectedVideo.id, liked: nextLiked }, {
+      onSuccess: () => { setLiked(nextLiked); toast.success(nextLiked ? "Video beğenildi" : "Beğeni kaldırıldı"); },
+      onError: (error) => toast.error(error.message),
     });
   };
 
@@ -237,8 +274,8 @@ export default function Home() {
       toast.info("Bu örnek kartın kanal kimliği yok; gerçek YouTube aramasından bir video seç.");
       return;
     }
-    subscribeToChannel.mutate({ channelId: selectedVideo.channelId }, {
-      onSuccess: () => toast.success("Kanala abone olundu."),
+    toggleYoutubeSubscription.mutate({ channelId: selectedVideo.channelId }, {
+      onSuccess: ({ subscribed: nextSubscribed }) => { setSubscribed(nextSubscribed); toast.success(nextSubscribed ? "Kanala abone olundu." : "Abonelikten çıkıldı."); },
       onError: (error) => toast.error(error.message),
     });
   };
@@ -246,7 +283,11 @@ export default function Home() {
   const submitComment = () => {
     if (!comment.trim()) return;
     if (selectedVideo.isUploaded) {
-      toast.info("Kişisel videolarda yorum alanı yalnızca YouTube videoları için açık.");
+      if (!isAuthenticated) { startLogin(); return; }
+      createMediaComment.mutate({ id: selectedMediaId, text: comment.trim() }, {
+        onSuccess: () => { setComment(""); toast.success("Yorum eklendi."); trpcUtils.media.social.invalidate(mediaSocialInput); },
+        onError: (error) => toast.error(error.message),
+      });
       return;
     }
     if (!requireYouTube()) return;
@@ -258,12 +299,8 @@ export default function Home() {
 
   const openOwnerFilePicker = () => {
     if (!isAuthenticated) {
-      toast.info("Özel medya alanı için önce SurroundTube oturumunu açmalısın.");
+      toast.info("Video yüklemek için önce SurroundTube oturumunu açmalısın.");
       startLogin();
-      return;
-    }
-    if (user?.role !== "admin") {
-      toast.error("Bu yükleme alanı yalnızca site sahibine açıktır.");
       return;
     }
     fileInputRef.current?.click();
@@ -295,6 +332,7 @@ export default function Home() {
         setUploadState({ status: "ready", progress: 100, name: file.name, message: "7.1 sesli çıktı hazır." });
         toast.success("Video işlendi ve 7.1 ses düzeniyle kaydedildi.");
         trpcUtils.media.list.invalidate();
+        trpcUtils.media.publicList.invalidate();
       } else {
         setUploadState({ status: "failed", progress: 0, name: file.name, message: payload.error ?? "Video işlenemedi." });
         toast.error(payload.error ?? "Video işlenemedi.");
@@ -433,7 +471,7 @@ export default function Home() {
             </div>
           </section>
 
-          {uploadedVideos.length > 0 && <section className="mt-10"><div className="mb-5 flex items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300"><FileVideo2 className="h-3.5 w-3.5" /> İşlenen videolar</div><h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.03em] text-white">Senin 7.1 arşivin</h2></div><span className="text-[11px] text-white/35">Kaynak 7.1 · cihazda otomatik downmix</span></div><div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">{uploadedVideos.map((video) => <article key={video.id} className="group rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 transition hover:border-cyan-300/30" onClick={() => selectVideo(video)}><div className="relative overflow-hidden rounded-xl bg-black"><video src={video.processedUrl ?? undefined} className="aspect-video w-full object-cover" controls preload="metadata" onClick={(event) => event.stopPropagation()} /><div className="absolute left-2 top-2 rounded-md bg-cyan-300/90 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-950">7.1</div></div><div className="mt-3 flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium text-white/85">{video.title}</h3><p className="mt-1 text-[11px] text-white/35">{video.channel}</p></div>{isAuthenticated && user?.role === "admin" && video.mediaId && <button onClick={(event) => { event.stopPropagation(); deleteOwnerVideo(video.mediaId!, video.title); }} className="rounded-lg p-2 text-white/35 transition hover:bg-rose-300/10 hover:text-rose-300" aria-label="Videoyu sil"><Trash2 className="h-4 w-4" /></button>}</div></article>)}</div></section>}
+          {uploadedVideos.length > 0 && <section className="mt-10"><div className="mb-5 flex items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300"><FileVideo2 className="h-3.5 w-3.5" /> İşlenen videolar</div><h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.03em] text-white">Topluluğun 7.1 arşivi</h2></div><span className="text-[11px] text-white/35">Kaynak 7.1 · cihazda otomatik downmix</span></div><div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">{uploadedVideos.map((video) => <article key={video.id} className="group rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 transition hover:border-cyan-300/30" onClick={() => selectVideo(video)}><div className="relative overflow-hidden rounded-xl bg-black"><video src={video.processedUrl ?? undefined} className="aspect-video w-full object-cover" controls preload="metadata" onClick={(event) => event.stopPropagation()} /><div className="absolute left-2 top-2 rounded-md bg-cyan-300/90 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-950">7.1</div></div><div className="mt-3 flex items-start gap-2"><div className="min-w-0 flex-1"><h3 className="truncate text-sm font-medium text-white/85">{video.title}</h3><p className="mt-1 text-[11px] text-white/35">{video.channel}</p><p className="mt-0.5 text-[11px] text-white/30">{video.views}</p></div>{isAuthenticated && video.mediaId && ownedMediaIds.has(video.mediaId) && <button onClick={(event) => { event.stopPropagation(); deleteOwnerVideo(video.mediaId!, video.title); }} className="rounded-lg p-2 text-white/35 transition hover:bg-rose-300/10 hover:text-rose-300" aria-label="Videoyu sil"><Trash2 className="h-4 w-4" /></button>}</div></article>)}</div></section>}
 
           <section id="feed" className="mt-10">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-300"><Zap className="h-3.5 w-3.5" /> {submittedQuery ? "Arama sonuçları" : "Senin için seçtik"}</div><h2 className="mt-2 font-display text-2xl font-semibold tracking-[-0.03em] text-white">Bugünün sesleri</h2></div><button onClick={() => toast.info("Daha fazla keşif yakında.")} className="flex items-center gap-1 text-xs font-medium text-white/45 transition hover:text-cyan-200">Tümünü gör <ChevronRight className="h-4 w-4" /></button></div>
@@ -455,18 +493,18 @@ export default function Home() {
 
           <section className="mt-12 grid gap-6 xl:grid-cols-[1fr_340px]">
             <div className="overflow-hidden rounded-[22px] border border-white/10 bg-[#0f151e]">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-5 py-4"><div><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35"><Volume2 className="h-3.5 w-3.5 text-cyan-300" /> Oynatma alanı</div><h3 className="mt-1 max-w-[500px] truncate text-base font-semibold text-white">{selectedVideo.title}</h3></div><div className="flex items-center gap-1"><Button onClick={toggleLike} variant="ghost" size="sm" className={`rounded-lg text-xs ${liked ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><ThumbsUp className={`mr-1.5 h-4 w-4 ${liked ? "fill-cyan-300" : ""}`} /> {liked ? "Beğenildi" : "Beğen"}</Button><Button onClick={() => setSaved((value) => !value)} variant="ghost" size="sm" className={`rounded-lg text-xs ${saved ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><Bookmark className={`mr-1.5 h-4 w-4 ${saved ? "fill-cyan-300" : ""}`} /> Kaydet</Button><Button onClick={() => toast.success("Paylaşım bağlantısı hazırlandı.")} variant="ghost" size="sm" className="rounded-lg text-xs text-white/50 hover:text-white"><Share2 className="mr-1.5 h-4 w-4" /> Paylaş</Button></div></div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.07] px-5 py-4"><div><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/35"><Volume2 className="h-3.5 w-3.5 text-cyan-300" /> Oynatma alanı</div><h3 className="mt-1 max-w-[500px] truncate text-base font-semibold text-white">{selectedVideo.title}</h3></div><div className="flex items-center gap-1"><Button onClick={toggleLike} variant="ghost" size="sm" className={`rounded-lg text-xs ${liked ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><ThumbsUp className={`mr-1.5 h-4 w-4 ${liked ? "fill-cyan-300" : ""}`} /> {liked ? "Beğenildi" : "Beğen"}{selectedVideo.isUploaded && mediaSocial.data ? ` · ${mediaSocial.data.likeCount}` : ""}</Button><Button onClick={() => setSaved((value) => !value)} variant="ghost" size="sm" className={`rounded-lg text-xs ${saved ? "text-cyan-200 hover:text-cyan-100" : "text-white/50 hover:text-white"}`}><Bookmark className={`mr-1.5 h-4 w-4 ${saved ? "fill-cyan-300" : ""}`} /> Kaydet</Button><Button onClick={() => toast.success("Paylaşım bağlantısı hazırlandı.")} variant="ghost" size="sm" className="rounded-lg text-xs text-white/50 hover:text-white"><Share2 className="mr-1.5 h-4 w-4" /> Paylaş</Button></div></div>
               <div className="grid gap-0 lg:grid-cols-[1fr_245px]">
                 <div className="aspect-video bg-black">{selectedVideo.isUploaded && selectedVideo.processedUrl ? <video className="h-full w-full" src={selectedVideo.processedUrl} controls playsInline preload="metadata" /> : <iframe className="h-full w-full" src={`https://www.youtube.com/embed/${selectedVideo.id}?rel=0&modestbranding=1`} title={selectedVideo.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />}</div>
                 <div className="border-t border-white/[0.07] p-5 lg:border-l lg:border-t-0"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/30">Ses modu</div><div className="mt-1 text-sm font-semibold text-white">{surroundMode}</div></div><SlidersHorizontal className="h-4 w-4 text-cyan-300" /></div><div className="mt-5 rounded-xl border border-cyan-300/25 bg-cyan-300/10 px-3 py-3 text-xs text-cyan-100"><div className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_8px_#67e8f9]" />7.1 Surround zorunlu</div><p className="mt-2 text-[10px] leading-4 text-cyan-100/60">Cihaz 7.1 desteklemiyorsa işletim sistemi veya tarayıcı otomatik downmix yapar; kaynak her zaman 7.1 kalır.</p></div><p className="mt-5 text-[10px] leading-4 text-white/30">YouTube videolarında orijinal kaynak ve oynatıcı korunur. Yüklediğin lisanslı videolar 7.1 AAC olarak işlenir.</p></div>
               </div>
-              <div className="flex items-center justify-between border-t border-white/[0.07] px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-blue-600 text-xs font-bold text-slate-950">{selectedVideo.channel.slice(0, 1)}</div><div><div className="text-sm font-medium text-white">{selectedVideo.channel}</div><div className="text-[11px] text-white/35">YouTube creator</div></div><Button onClick={handleSubscribe} size="sm" className="ml-2 rounded-lg bg-white text-[11px] font-semibold text-slate-950 hover:bg-cyan-200">Abone ol</Button></div><div className="hidden items-center gap-3 text-[11px] text-white/35 sm:flex"><span>Orijinal video</span><a className="text-cyan-300 hover:text-cyan-200" href={`https://www.youtube.com/watch?v=${selectedVideo.id}`} target="_blank" rel="noreferrer">YouTube’da aç ↗</a></div></div>
+              <div className="flex items-center justify-between border-t border-white/[0.07] px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-blue-600 text-xs font-bold text-slate-950">{selectedVideo.channel.slice(0, 1)}</div><div><div className="text-sm font-medium text-white">{selectedVideo.channel}</div><div className="text-[11px] text-white/35">YouTube creator</div></div><Button onClick={handleSubscribe} size="sm" className="ml-2 rounded-lg bg-white text-[11px] font-semibold text-slate-950 hover:bg-cyan-200">{subscribed ? "Abonelikten çık" : "Abone ol"}</Button></div><div className="hidden items-center gap-3 text-[11px] text-white/35 sm:flex"><span>Orijinal video</span><a className="text-cyan-300 hover:text-cyan-200" href={`https://www.youtube.com/watch?v=${selectedVideo.id}`} target="_blank" rel="noreferrer">YouTube’da aç ↗</a></div></div>
             </div>
 
             <aside className="rounded-[22px] border border-cyan-300/15 bg-gradient-to-br from-[#12202a] to-[#0c1017] p-5"><div className="flex items-start justify-between"><div><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-200"><Waves className="h-3.5 w-3.5" /> Spatial Lab</div><h3 className="mt-2 text-lg font-semibold text-white">Stem’lerini genişlet.</h3></div><div className="rounded-xl bg-cyan-300/10 p-2 text-cyan-200"><Headphones className="h-4 w-4" /></div></div><p className="mt-3 text-xs leading-5 text-white/45">Davul, bas, vokal ve ambiyansı ayrı kanallarla yükle. Hoparlör düzenini seç, miksini tarayıcıda kontrol et.</p><div className="mt-5 grid grid-cols-4 gap-1.5">{["L", "R", "C", "LFE", "Ls", "Rs", "Lb", "Rb"].map((channel, index) => <div key={channel} className={`rounded-lg border p-2 text-center ${index < 2 ? "border-cyan-300/25 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/35"}`}><div className="mx-auto mb-1 h-1.5 w-1.5 rounded-full bg-current" /><div className="text-[9px] font-bold">{channel}</div></div>)}</div><Button onClick={() => setShowSettings(true)} variant="outline" className="mt-5 w-full rounded-xl border-cyan-300/20 bg-cyan-300/[0.06] text-xs text-cyan-100 hover:bg-cyan-300/15 hover:text-white"><Settings2 className="mr-2 h-3.5 w-3.5" /> Projeyi yapılandır</Button></aside>
           </section>
 
-          <section className="mt-6 rounded-[22px] border border-white/10 bg-[#0f151e] p-5"><div className="mb-4 flex items-center gap-2"><MessageCircle className="h-4 w-4 text-cyan-300" /><h3 className="text-sm font-semibold text-white">Yorumlar</h3><span className="text-[11px] text-white/30">YouTube yorumları</span></div><div className="flex gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs text-white/60"><UserRound className="h-4 w-4" /></div><div className="flex min-w-0 flex-1 gap-2"><Input value={comment} onChange={(event) => setComment(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") submitComment(); }} placeholder="Yorum eklemek için YouTube’da oturum aç…" className="h-9 border-white/10 bg-white/[0.04] text-xs text-white placeholder:text-white/30 focus-visible:ring-cyan-300/30" /><Button onClick={submitComment} size="icon" className="h-9 w-9 shrink-0 rounded-lg bg-cyan-300 text-slate-950 hover:bg-cyan-200" aria-label="Yorum gönder"><Send className="h-3.5 w-3.5" /></Button></div></div></section>
+          <section className="mt-6 rounded-[22px] border border-white/10 bg-[#0f151e] p-5"><div className="mb-4 flex items-center gap-2"><MessageCircle className="h-4 w-4 text-cyan-300" /><h3 className="text-sm font-semibold text-white">Yorumlar</h3><span className="text-[11px] text-white/30">{selectedVideo.isUploaded ? ((mediaSocial.data?.comments.length ?? 0) + " yorum") : "YouTube yorumları"}</span></div><div className="flex gap-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs text-white/60"><UserRound className="h-4 w-4" /></div><div className="flex min-w-0 flex-1 gap-2"><Input value={comment} onChange={(event) => setComment(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") submitComment(); }} placeholder={selectedVideo.isUploaded ? "Yorumunu yaz…" : "Yorum eklemek için YouTube’da oturum aç…"} className="h-9 border-white/10 bg-white/[0.04] text-xs text-white placeholder:text-white/30 focus-visible:ring-cyan-300/30" /><Button onClick={submitComment} size="icon" className="h-9 w-9 shrink-0 rounded-lg bg-cyan-300 text-slate-950 hover:bg-cyan-200" aria-label="Yorum gönder"><Send className="h-3.5 w-3.5" /></Button></div></div>{selectedVideo.isUploaded && Boolean(mediaSocial.data?.comments.length) && <div className="mt-5 space-y-3">{mediaSocial.data?.comments.map((item) => <div key={item.id} className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"><div className="flex items-center justify-between gap-3"><span className="text-[11px] font-medium text-cyan-100/80">{item.userName}</span>{item.canDelete && <button onClick={() => deleteMediaComment.mutate({ commentId: item.id }, { onSuccess: () => { toast.success("Yorum silindi."); trpcUtils.media.social.invalidate(mediaSocialInput); }, onError: (error) => toast.error(error.message) })} className="text-white/30 hover:text-rose-300" aria-label="Yorumu sil"><Trash2 className="h-3.5 w-3.5" /></button>}</div><p className="mt-1 text-xs leading-5 text-white/60">{item.text}</p></div>)}</div>}{!selectedVideo.isUploaded && Boolean(youtubeComments.data?.length) && <div className="mt-5 space-y-3">{youtubeComments.data?.map((item) => <div key={item.id} className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"><div className="flex items-center justify-between gap-3"><span className="text-[11px] font-medium text-cyan-100/80">{item.userName}</span><button onClick={() => deleteYoutubeComment.mutate({ commentId: item.id }, { onSuccess: () => { toast.success("YouTube yorumu silindi."); trpcUtils.youtube.comments.invalidate(youtubeLikeInput); }, onError: (error) => toast.error(error.message) })} className="text-white/30 hover:text-rose-300" aria-label="YouTube yorumunu sil"><Trash2 className="h-3.5 w-3.5" /></button></div><p className="mt-1 text-xs leading-5 text-white/60">{item.text}</p></div>)}</div>}</section>
 
           <footer className="mt-12 flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.07] py-6 text-[10px] text-white/25"><div>© 2026 SurroundTube · YouTube API Services uyumlu deneyim</div><div className="flex gap-4"><button onClick={() => toast.info("Gizlilik politikası hazırlanıyor.")} className="hover:text-white/60">Gizlilik</button><button onClick={() => toast.info("Kullanım koşulları hazırlanıyor.")} className="hover:text-white/60">Koşullar</button><button onClick={() => toast.info("Yardım merkezi yakında.")} className="flex items-center gap-1 hover:text-white/60"><CircleHelp className="h-3 w-3" /> Yardım</button></div></footer>
         </main>
@@ -474,7 +512,7 @@ export default function Home() {
 
       {showSettings && <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/60 p-0 backdrop-blur-sm sm:p-5"><div className="h-full w-full max-w-[440px] overflow-y-auto border-l border-white/10 bg-[#0d131b] p-6 shadow-2xl sm:h-auto sm:max-h-[calc(100vh-40px)] sm:rounded-[24px] sm:border"><div className="flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-300">Spatial Lab / Settings</div><h2 className="mt-2 text-xl font-semibold text-white">Ses alanını kur</h2></div><button onClick={() => setShowSettings(false)} className="rounded-xl p-2 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Kapat"><X className="h-5 w-5" /></button></div><div className="mt-7 space-y-5"><div className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.06] p-4"><div className="flex gap-3"><Subtitles className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" /><p className="text-xs leading-5 text-amber-100/65">YouTube videolarının ses parçalarını ayırmak veya alternatif ses eklemek YouTube API politikalarıyla yasaktır. Bu panel sadece sana ait veya açık lisanslı stem’ler için kullanılacaktır.</p></div></div><div><label className="text-xs font-medium text-white/70">Hoparlör düzeni</label><div className="mt-2 grid grid-cols-3 gap-2"><div className="rounded-xl border border-cyan-300/30 bg-cyan-300/10 p-3 text-xs text-cyan-100"><div className="flex items-center justify-between"><span>7.1 Surround</span><span className="rounded bg-cyan-300/15 px-1.5 py-0.5 text-[9px] text-cyan-200">zorunlu</span></div><p className="mt-2 text-[10px] leading-4 text-cyan-100/60">Stereo seçilemez. 7.1 desteklenmeyen cihazlarda otomatik downmix yapılır.</p></div></div></div><div><label className="text-xs font-medium text-white/70">Dinamik aralık</label><div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[72%] rounded-full bg-gradient-to-r from-cyan-300 to-blue-500" /></div><div className="mt-2 flex justify-between text-[10px] text-white/30"><span>Sinematik</span><span>72%</span><span>Stüdyo</span></div></div><div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"><div className="flex items-center gap-2 text-sm text-white"><LockIcon /> Licensed project mode</div><p className="mt-2 text-[11px] leading-5 text-white/35">Kendi ses dosyalarını yüklediğinde L/R/C/LFE/Ls/Rs/Lb/Rb kanallarını ayrı ayrı izleyebileceğin üretim alanı.</p><input ref={fileInputRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) uploadOwnerVideo(file); }} />
                   <Button onClick={openOwnerFilePicker} className="mt-4 w-full rounded-xl bg-white text-xs text-slate-950 hover:bg-cyan-200"><FileVideo2 className="mr-2 h-3.5 w-3.5" /> Videoyu seç ve işle</Button>
-                  <p className="mt-2 text-[10px] leading-4 text-white/30">Yalnızca senin hesabın yükleyebilir. MP4/WebM/MOV/MKV · maksimum 128 MB.</p>
+                  <p className="mt-2 text-[10px] leading-4 text-white/30">Her giriş yapmış hesap yükleyebilir. MP4/WebM/MOV/MKV · maksimum 128 MB.</p>
                   {uploadState.status !== "idle" && <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center justify-between text-[11px] text-white/70"><span className="truncate">{uploadState.name}</span><span>{uploadState.status === "uploading" ? ("%" + uploadState.progress) : uploadState.status === "ready" ? "Hazır" : "Hata"}</span></div>{uploadState.status === "uploading" && <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-cyan-300 transition-all" style={{ width: "%" + uploadState.progress }} /></div>}{uploadState.message && <p className="mt-2 text-[10px] text-cyan-100/60">{uploadState.message}</p>}</div>}
                   {Boolean(mediaList.data?.length) && <div className="mt-4 space-y-2"><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-white/30">İşlenmiş projelerin</div>{mediaList.data?.slice(0, 3).map((item) => <div key={item.id} className="rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center gap-2"><FileVideo2 className="h-3.5 w-3.5 shrink-0 text-cyan-300" /><span className="min-w-0 flex-1 truncate text-[11px] text-white/70">{item.originalFilename}</span><span className={"text-[9px] uppercase tracking-wider " + (item.status === "ready" ? "text-lime-300" : item.status === "failed" ? "text-rose-300" : "text-amber-200")}>{item.status === "ready" ? "7.1 hazır" : item.status === "failed" ? "hata" : "işleniyor"}</span></div>{item.status === "ready" && item.processedUrl && <video className="mt-2 w-full rounded-lg" src={item.processedUrl} controls preload="metadata" />}</div>)}</div>}</div></div></div></div>}
     </div>

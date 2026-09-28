@@ -1,6 +1,6 @@
-import { and, eq, desc, isNotNull } from "drizzle-orm";
+import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, youtubeConnections, InsertYoutubeConnection, mediaUploads, InsertMediaUpload } from "../drizzle/schema";
+import { InsertUser, users, youtubeConnections, InsertYoutubeConnection, mediaUploads, InsertMediaUpload, mediaLikes, mediaComments } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -74,10 +74,11 @@ export async function updateMediaUpload(id: number, values: Partial<InsertMediaU
   await db.update(mediaUploads).set({ ...values, updatedAt: new Date() }).where(eq(mediaUploads.id, id));
 }
 
-export async function listMediaUploads(ownerOpenId: string) {
+export async function listMediaUploads(ownerOpenId?: string) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(mediaUploads).where(eq(mediaUploads.ownerOpenId, ownerOpenId)).orderBy(desc(mediaUploads.createdAt));
+  const query = ownerOpenId ? eq(mediaUploads.ownerOpenId, ownerOpenId) : undefined;
+  return db.select().from(mediaUploads).where(query).orderBy(desc(mediaUploads.createdAt));
 }
 
 export async function listPublicMediaUploads() {
@@ -89,5 +90,48 @@ export async function listPublicMediaUploads() {
 export async function deleteMediaUpload(id: number, ownerOpenId: string) {
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
+  await db.delete(mediaLikes).where(eq(mediaLikes.mediaId, id));
+  await db.delete(mediaComments).where(eq(mediaComments.mediaId, id));
   await db.delete(mediaUploads).where(and(eq(mediaUploads.id, id), eq(mediaUploads.ownerOpenId, ownerOpenId)));
+}
+
+export async function incrementMediaViews(mediaId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(mediaUploads).set({ viewsCount: sql`${mediaUploads.viewsCount} + 1`, updatedAt: new Date() }).where(and(eq(mediaUploads.id, mediaId), eq(mediaUploads.status, "ready")));
+}
+
+export async function getMediaSocialState(mediaId: number, userOpenId?: string) {
+  const db = await getDb();
+  if (!db) return { viewsCount: 0, likeCount: 0, liked: false, comments: [] };
+  const media = await db.select({ viewsCount: mediaUploads.viewsCount }).from(mediaUploads).where(eq(mediaUploads.id, mediaId)).limit(1);
+  const likes = await db.select({ value: count() }).from(mediaLikes).where(eq(mediaLikes.mediaId, mediaId));
+  const userLike = userOpenId ? await db.select({ id: mediaLikes.id }).from(mediaLikes).where(and(eq(mediaLikes.mediaId, mediaId), eq(mediaLikes.userOpenId, userOpenId))).limit(1) : [];
+  const comments = await db.select().from(mediaComments).where(eq(mediaComments.mediaId, mediaId)).orderBy(desc(mediaComments.createdAt));
+  return { viewsCount: media[0]?.viewsCount ?? 0, likeCount: Number(likes[0]?.value ?? 0), liked: userLike.length > 0, comments: comments.map(({ id, userName, text, createdAt, userOpenId: commentOwnerOpenId }) => ({ id, userName, text, createdAt, canDelete: commentOwnerOpenId === userOpenId })) };
+}
+
+export async function toggleMediaLike(mediaId: number, userOpenId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const existing = await db.select({ id: mediaLikes.id }).from(mediaLikes).where(and(eq(mediaLikes.mediaId, mediaId), eq(mediaLikes.userOpenId, userOpenId))).limit(1);
+  if (existing.length) {
+    await db.delete(mediaLikes).where(eq(mediaLikes.id, existing[0].id));
+    return false;
+  }
+  try { await db.insert(mediaLikes).values({ mediaId, userOpenId }); return true; }
+  catch { return true; }
+}
+
+export async function createMediaComment(mediaId: number, userOpenId: string, userName: string, text: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.insert(mediaComments).values({ mediaId, userOpenId, userName, text });
+  return Number(result[0].insertId);
+}
+
+export async function deleteMediaComment(commentId: number, userOpenId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.delete(mediaComments).where(and(eq(mediaComments.id, commentId), eq(mediaComments.userOpenId, userOpenId)));
 }

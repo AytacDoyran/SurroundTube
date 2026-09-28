@@ -5,7 +5,6 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import express, { type Express, type Request, type Response } from "express";
 import { sdk } from "./_core/sdk";
-import { ENV } from "./_core/env";
 import { createMediaUpload, updateMediaUpload } from "./db";
 import { storagePut } from "./storage";
 
@@ -36,10 +35,9 @@ export function runFfmpeg(inputPath: string, outputPath: string) {
   });
 }
 
-async function ownerFromRequest(req: Request) {
+async function userFromRequest(req: Request) {
   try {
-    const user = await sdk.authenticateRequest(req);
-    return user && user.openId === ENV.ownerOpenId ? user : null;
+    return await sdk.authenticateRequest(req);
   } catch {
     return null;
   }
@@ -47,8 +45,8 @@ async function ownerFromRequest(req: Request) {
 
 export function registerMediaRoutes(app: Express) {
   app.post("/api/owner/media", expressRawVideo(), async (req: Request, res: Response) => {
-    const owner = await ownerFromRequest(req);
-    if (!owner) return res.status(403).json({ error: "Only the configured owner can upload media." });
+    const owner = await userFromRequest(req);
+    if (!owner) return res.status(403).json({ error: "You must be signed in to upload media." });
 
     const mimeType = req.get("content-type")?.split(";")[0] ?? "application/octet-stream";
     const rawFilename = String(req.get("x-file-name") ?? "upload.mp4");

@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
@@ -31,8 +31,26 @@ export const mediaUploads = mysqlTable("media_uploads", {
   processedUrl: text("processedUrl"),
   mimeType: varchar("mimeType", { length: 100 }).notNull(),
   sizeBytes: int("sizeBytes").notNull(),
+  viewsCount: int("viewsCount").default(0).notNull(),
   status: mysqlEnum("status", ["processing", "ready", "failed"]).default("processing").notNull(),
   errorMessage: text("errorMessage"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const mediaLikes = mysqlTable("media_likes", {
+  id: int("id").autoincrement().primaryKey(),
+  mediaId: int("mediaId").notNull(),
+  userOpenId: varchar("userOpenId", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({ uniqueMediaLike: uniqueIndex("media_likes_media_user_unique").on(table.mediaId, table.userOpenId) }));
+
+export const mediaComments = mysqlTable("media_comments", {
+  id: int("id").autoincrement().primaryKey(),
+  mediaId: int("mediaId").notNull(),
+  userOpenId: varchar("userOpenId", { length: 64 }).notNull(),
+  userName: varchar("userName", { length: 255 }).notNull(),
+  text: text("text").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -43,3 +61,5 @@ export type YoutubeConnection = typeof youtubeConnections.$inferSelect;
 export type InsertYoutubeConnection = typeof youtubeConnections.$inferInsert;
 export type MediaUpload = typeof mediaUploads.$inferSelect;
 export type InsertMediaUpload = typeof mediaUploads.$inferInsert;
+export type MediaLike = typeof mediaLikes.$inferSelect;
+export type MediaComment = typeof mediaComments.$inferSelect;
