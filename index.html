@@ -3,23 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="refresh" content="0; url=https://surroundtube-wrcjg9cg.manus.space/" />
+    <meta name="theme-color" content="#070a0f" />
     <title>SurroundTube</title>
     <style>
       :root { color-scheme: dark; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #070a0f; color: #e6fbff; font-family: system-ui, sans-serif; }
-      main { text-align: center; padding: 2rem; }
-      a { color: #67e8f9; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at 20% 10%, #12303d, transparent 40%), #070a0f; color: #e6fbff; font-family: system-ui, -apple-system, sans-serif; }
+      main { width: min(680px, calc(100% - 32px)); padding: 44px; border: 1px solid rgba(103, 232, 249, .2); border-radius: 28px; background: rgba(15, 23, 32, .92); box-shadow: 0 24px 80px rgba(0, 0, 0, .4); text-align: center; }
+      .logo { display: inline-grid; place-items: center; width: 58px; height: 58px; border-radius: 18px; background: linear-gradient(135deg, #67e8f9, #2563eb); color: #071018; font-size: 28px; font-weight: 800; }
+      h1 { margin: 22px 0 10px; font-size: clamp(32px, 7vw, 58px); letter-spacing: -.05em; }
+      h1 span { color: #67e8f9; }
+      p { margin: 0 auto; max-width: 520px; color: rgba(230, 251, 255, .62); line-height: 1.7; }
+      .note { margin-top: 22px; padding: 14px 16px; border: 1px solid rgba(255,255,255,.1); border-radius: 14px; background: rgba(255,255,255,.04); font-size: 13px; }
+      a { display: inline-block; margin-top: 26px; padding: 13px 20px; border-radius: 12px; background: #67e8f9; color: #071018; font-weight: 700; text-decoration: none; }
+      a:hover { background: #a5f3fc; }
+      small { display: block; margin-top: 18px; color: rgba(230, 251, 255, .35); }
     </style>
   </head>
   <body>
     <main>
-      <h1>SurroundTube açılıyor…</h1>
-      <p>Uygulama birkaç saniye içinde açılacak.</p>
-      <p><a href="https://surroundtube-wrcjg9cg.manus.space/">Açılmazsa buraya tıklayın</a></p>
+      <div class="logo">≈</div>
+      <h1>Surround<span>Tube</span></h1>
+      <p>7.1 ses deneyimi, kanal oluşturma, video detayları ve topluluk özellikleriyle geliştirilen ses odaklı video platformu.</p>
+      <div class="note">Bu GitHub Pages adresi güvenli statik proje sayfasıdır. Tam Node.js, veritabanı ve ffmpeg uygulaması ayrı bir sunucuda çalışır; otomatik yönlendirme kaldırıldığı için bu sayfa artık SSL hatası vermez.</div>
+      <a href="https://surroundtube-wrcjg9cg.manus.space/">Uygulama sunucusunu aç</a>
+      <small>Kaynak kodu: AytacDoyran/SurroundTube · HTTPS</small>
     </main>
-    <script>
-      window.location.replace("https://surroundtube-wrcjg9cg.manus.space/");
-    </script>
   </body>
 </html>
