@@ -4,6 +4,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { youtubeRouter } from "./youtube";
 import { mediaRouter } from "./media-router";
+import { channelRouter } from "./channel-router";
 
 export const appRouter = router({
   system: systemRouter,
@@ -17,6 +18,7 @@ export const appRouter = router({
   }),
   youtube: youtubeRouter,
   media: mediaRouter,
+  channel: channelRouter,
 });
 
 export type AppRouter = typeof appRouter;

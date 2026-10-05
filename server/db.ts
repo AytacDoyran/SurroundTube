@@ -1,6 +1,6 @@
 import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, youtubeConnections, InsertYoutubeConnection, mediaUploads, InsertMediaUpload, mediaLikes, mediaComments } from "../drizzle/schema";
+import { InsertUser, users, youtubeConnections, InsertYoutubeConnection, channels, InsertChannel, channelSubscriptions, mediaUploads, InsertMediaUpload, mediaLikes, mediaComments } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -59,6 +59,49 @@ export async function upsertYoutubeConnection(connection: InsertYoutubeConnectio
   await db.insert(youtubeConnections).values(connection).onDuplicateKeyUpdate({
     set: { accessToken: connection.accessToken, refreshToken: connection.refreshToken, scope: connection.scope, expiresAt: connection.expiresAt, updatedAt: new Date() },
   });
+}
+
+export async function getOwnedChannel(ownerOpenId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(channels).where(eq(channels.ownerOpenId, ownerOpenId)).limit(1);
+  return rows[0];
+}
+
+export async function createChannel(channel: InsertChannel) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.insert(channels).values(channel);
+  return Number(result[0].insertId);
+}
+
+export async function listChannels() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(channels).orderBy(desc(channels.createdAt));
+}
+
+export async function listSubscriptions(userOpenId: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ channel: channels, subscribedAt: channelSubscriptions.createdAt })
+    .from(channelSubscriptions)
+    .innerJoin(channels, eq(channelSubscriptions.channelId, channels.id))
+    .where(eq(channelSubscriptions.userOpenId, userOpenId))
+    .orderBy(desc(channelSubscriptions.createdAt));
+}
+
+export async function toggleChannelSubscription(channelId: number, userOpenId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const existing = await db.select({ id: channelSubscriptions.id }).from(channelSubscriptions)
+    .where(and(eq(channelSubscriptions.channelId, channelId), eq(channelSubscriptions.userOpenId, userOpenId))).limit(1);
+  if (existing.length) {
+    await db.delete(channelSubscriptions).where(eq(channelSubscriptions.id, existing[0].id));
+    return false;
+  }
+  await db.insert(channelSubscriptions).values({ channelId, userOpenId });
+  return true;
 }
 
 export async function createMediaUpload(upload: InsertMediaUpload) {

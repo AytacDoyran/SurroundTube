@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import express, { type Express, type Request, type Response } from "express";
 import { sdk } from "./_core/sdk";
-import { createMediaUpload, updateMediaUpload } from "./db";
+import { createMediaUpload, getOwnedChannel, updateMediaUpload } from "./db";
 import { storagePut } from "./storage";
 
 const MAX_UPLOAD_BYTES = 128 * 1024 * 1024;
@@ -58,7 +58,8 @@ export function registerMediaRoutes(app: Express) {
     if (body.length > MAX_UPLOAD_BYTES) return res.status(413).json({ error: "Video is larger than 128 MB." });
     if (!allowedMimeTypes.has(mimeType)) return res.status(415).json({ error: "Supported formats: MP4, WebM, MOV and MKV." });
 
-    const id = await createMediaUpload({ ownerOpenId: owner.openId, originalFilename: filename, mimeType, sizeBytes: body.length, status: "processing" });
+    const channel = await getOwnedChannel(owner.openId);
+    const id = await createMediaUpload({ ownerOpenId: owner.openId, channelId: channel?.id ?? null, originalFilename: filename, mimeType, sizeBytes: body.length, status: "processing" });
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "surroundtube-"));
     const inputPath = path.join(workDir, `input-${randomUUID()}${path.extname(filename) || ".mp4"}`);
     const outputPath = path.join(workDir, `processed-${randomUUID()}.mp4`);

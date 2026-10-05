@@ -23,9 +23,27 @@ export const youtubeConnections = mysqlTable("youtube_connections", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const channels = mysqlTable("channels", {
+  id: int("id").autoincrement().primaryKey(),
+  ownerOpenId: varchar("ownerOpenId", { length: 64 }).notNull().unique(),
+  name: varchar("name", { length: 120 }).notNull(),
+  handle: varchar("handle", { length: 80 }).notNull().unique(),
+  description: text("description"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const channelSubscriptions = mysqlTable("channel_subscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  channelId: int("channelId").notNull(),
+  userOpenId: varchar("userOpenId", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({ uniqueSubscription: uniqueIndex("channel_subscriptions_channel_user_unique").on(table.channelId, table.userOpenId) }));
+
 export const mediaUploads = mysqlTable("media_uploads", {
   id: int("id").autoincrement().primaryKey(),
   ownerOpenId: varchar("ownerOpenId", { length: 64 }).notNull(),
+  channelId: int("channelId"),
   originalFilename: varchar("originalFilename", { length: 255 }).notNull(),
   processedKey: text("processedKey"),
   processedUrl: text("processedUrl"),
@@ -59,6 +77,9 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type YoutubeConnection = typeof youtubeConnections.$inferSelect;
 export type InsertYoutubeConnection = typeof youtubeConnections.$inferInsert;
+export type Channel = typeof channels.$inferSelect;
+export type InsertChannel = typeof channels.$inferInsert;
+export type ChannelSubscription = typeof channelSubscriptions.$inferSelect;
 export type MediaUpload = typeof mediaUploads.$inferSelect;
 export type InsertMediaUpload = typeof mediaUploads.$inferInsert;
 export type MediaLike = typeof mediaLikes.$inferSelect;
